@@ -368,7 +368,6 @@ class TidalAPI(object):
             ret.encryptionKey = manifest['keyId'] if 'keyId' in manifest else ""
             ret.url = manifest['urls'][0]
             return "", ret
-        #The following code is derived from https://github.com/Dniel97/orpheusdl-tidal. No license is mentioned.
         if "application/dash+xml" in resp.manifestMimeType:
             xml = base64.b64decode(resp.manifest).decode('utf-8')
             # Removes default namespace definition, don't do that!
