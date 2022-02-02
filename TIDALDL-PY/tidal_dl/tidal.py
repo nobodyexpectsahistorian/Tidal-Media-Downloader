@@ -20,6 +20,8 @@ from requests.packages import urllib3
 from tidal_dl.enums import Type, AudioQuality, VideoQuality
 from tidal_dl.model import Album, Track, Video, Artist, Playlist, StreamUrl, VideoStreamUrl, SearchResult, Lyrics, Mix
 import tidal_dl.apiKey as apiKey
+from xml.etree import ElementTree
+import re
 
 __VERSION__ = '1.9.1'
 __URL_PRE__ = 'https://api.tidalhifi.com/v1/'
@@ -366,6 +368,66 @@ class TidalAPI(object):
             ret.encryptionKey = manifest['keyId'] if 'keyId' in manifest else ""
             ret.url = manifest['urls'][0]
             return "", ret
+        #The following code is derived from https://github.com/Dniel97/orpheusdl-tidal. No license is mentioned.
+        if "application/dash+xml" in resp.manifestMimeType:
+            xml = base64.b64decode(resp.manifest).decode('utf-8')
+            # Removes default namespace definition, don't do that!
+            xml = re.sub(r'xmlns="[^"]+"', '', xml, count=1)
+            root = ElementTree.fromstring(xml)
+
+            # List of AudioTracks
+            tracks = []
+            
+            for period in root.findall('Period'):
+                for adaptation_set in period.findall('AdaptationSet'):
+                    for rep in adaptation_set.findall('Representation'):
+                        # Check if representation is audio
+                        content_type = adaptation_set.get('contentType')
+                        if content_type != 'audio':
+                            raise ValueError('Only supports audio MPDs!')
+
+                        # Codec checks
+                        codec = rep.get('codecs')
+                        if codec.startswith('MP4A'):
+                            codec = 'AAC'
+
+                        # Segment template
+                        seg_template = rep.find('SegmentTemplate')
+                        # Add init file to track_urls
+                        track_urls = [seg_template.get('initialization')]
+                        start_number = int(seg_template.get('startNumber') or 1)
+
+                        # https://dashif-documents.azurewebsites.net/Guidelines-TimingModel/master/Guidelines-TimingModel.html#addressing-explicit
+                        # Also see example 9
+                        seg_timeline = seg_template.find('SegmentTimeline')
+                        if seg_timeline is not None:
+                            seg_time_list = []
+                            cur_time = 0
+
+                            for s in seg_timeline.findall('S'):
+                                # Media segments start time
+                                if s.get('t'):
+                                    cur_time = int(s.get('t'))
+
+                                # Segment reference
+                                for i in range((int(s.get('r') or 0) + 1)):
+                                    seg_time_list.append(cur_time)
+                                    # Add duration to current time
+                                    cur_time += int(s.get('d'))
+
+                        # Create list with $Number$ indices
+                        seg_num_list = list(range(start_number, len(seg_time_list) + start_number))
+                        # Replace $Number$ with all the seg_num_list indices
+                        track_urls += [seg_template.get('media').replace('$Number$', str(n)) for n in seg_num_list]
+            ret = StreamUrl()
+            ret.trackid = resp.trackid
+            ret.soundQuality = resp.audioQuality
+            ret.codec = codec
+            #ret.encryptionKey = manifest['keyId'] if 'keyId' in manifest else ""
+            ret.encryptionKey = ""
+            ret.url = track_urls
+            return "", ret
+            #return "Answewr ist" + base64.b64decode(resp.manifest).decode('utf-8'), None
         return "Can't get the streamUrl, type is " + resp.manifestMimeType, None
 
     def getVideoStreamUrl(self, id, quality: VideoQuality):

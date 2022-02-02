@@ -13,6 +13,7 @@ import logging
 import os
 import time
 import requests
+import ffmpeg
 
 import aigpy
 import lyricsgenius
@@ -151,7 +152,7 @@ def getAlbumPath(conf: Settings, album):
     retpath = retpath.replace(R"{NumberOfTracks}", str(album.numberOfTracks))
     retpath = retpath.replace(R"{NumberOfVideos}", str(album.numberOfVideos))
     retpath = retpath.replace(R"{NumberOfVolumes}", str(album.numberOfVolumes))
-    retpath = retpath.replace(R"{ReleaseDate}", str(album.releaseDate))
+    retpath = retpath.replace(R"{ReleaseDate}", album.releaseDate)
     retpath = retpath.replace(R"{RecordType}", album.type)
     retpath = retpath.replace(R"{None}", "")
     retpath = stripPath(retpath.strip())
@@ -335,9 +336,14 @@ def skip(path, url):
 
 
 def convert(srcPath, stream):
-    if CONF.onlyM4a:
-        return convertToM4a(srcPath, stream.codec)
-    return srcPath
+    if not "flac" in stream.codec:
+        if CONF.onlyM4a:
+            return convertToM4a(srcPath, stream.codec)
+    newpath = srcPath.replace('.m4a', '.flac')
+    #for reasons I don't understand the files are served as flac in an mp4 container so they are converted here to normal flacs.
+    ffmpeg.input(srcPath, hide_banner=None, y=None).output(newpath, acodec='copy',loglevel='error').run()
+    aigpy.path.remove(srcPath)
+    return newpath
 
 
 def downloadTrack(track: Track, album=None, playlist=None, userProgress=None, partSize=1048576):
@@ -358,21 +364,18 @@ def downloadTrack(track: Track, album=None, playlist=None, userProgress=None, pa
             return True, ""
 
         # download
-        logging.info("[DL Track] name=" + aigpy.path.getFileName(path) + "\nurl=" + stream.url)
-        tool = aigpy.download.DownloadTool(path + '.part', [stream.url])
+        logging.info("[DL Track] name=" + aigpy.path.getFileName(path) + "\nurl=" + stream.url[0])
+        tool = aigpy.download.DownloadTool(path + '.part', stream.url)
         tool.setUserProgress(userProgress)
-        tool.setPartSize(partSize)
+        #tool.setPartSize(partSize)
         check, err = tool.start(CONF.showProgress)
         if not check:
             Printf.err("Download failed! " + aigpy.path.getFileName(path) + ' (' + str(err) + ')')
             return False, str(err)
-
         # encrypted -> decrypt and remove encrypted file
         encrypted(stream, path + '.part', path)
-
         # convert
         path = convert(path, stream)
-
         # contributors
         msg, contributors = API.getTrackContributors(track.id)
         msg, tidalLyrics = API.getLyrics(track.id)
